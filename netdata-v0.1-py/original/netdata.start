@@ -1,0 +1,265 @@
+#!/bin/bash
+
+base="`dirname "$0"`"
+
+if [ ! -d "$base" -o ! -f "$base/netdata.c" ]
+then
+	echo >&2 "Cannot find my home directory '${base}'."
+	exit 1
+fi
+cd "$base" || exit 1
+
+# every how many seconds to update the JSON files
+NETDATA_CONFIG_UPDATE_EVERY=1
+
+# how many points should the graphs have
+NETDATA_CONFIG_HISTORY_POINTS=60
+
+# every how many graph refreshes, the page should be reloaded
+# this fixes a bug in the google graphs API which leaks memory
+# when refreshes graphs
+NETDATA_CONFIG_RELOAD_EVERY=500
+
+if [ -f netdata.conf ]
+then
+	source netdata.conf
+fi
+
+echo "Creating a directory for netdata..."
+data=
+for x in /run/netdata /var/run/netdata /tmp/netdata
+do
+	echo "	Trying '${x}'..."
+	if [ ! -d "${x}" ]
+	then
+		mkdir "${x}" 2>/dev/null
+		if [ $? -eq 0 ]
+		then
+			echo "	OK. '${x}' works."
+			data="${x}"
+			break
+		fi
+	else
+		echo "	OK. '${x}' works."
+		data="${x}"
+		break
+	fi
+done
+
+if [ -z "${data}" ]
+then
+	echo >&2 "Cannot find where to put JSON files."
+	exit 1
+fi
+
+cat <<EOFHTACCESS >"${data}/.htaccess"
+
+ExpiresActive on
+ExpiresDefault A0
+ExpiresByType application/json A0
+
+Header set Cache-Control "no-store, no-cache, must-revalidate, max-age=0"
+Header set Pragma "no-cache"
+
+EOFHTACCESS
+
+echo "Stopping a (possibly) running netdata..."
+killall netdata 2>/dev/null
+
+sleep 1
+rm "${data}"/*.json
+
+echo "Compiling netdata"
+gcc -O3 -o netdata netdata.c || exit 1
+
+echo "Starting netdata"
+./netdata -d -u $NETDATA_CONFIG_UPDATE_EVERY -l $NETDATA_CONFIG_HISTORY_POINTS -o "${data}" || exit 1
+
+echo "Waiting 2 seconds for the JSON files"
+# wait 2 seconds for the JSON files to be generated
+sleep 2
+
+if [ -h data ]
+then
+	echo "Removing existing $base/data link"
+	rm data || exit 1
+fi
+
+if [ ! -d data ]
+then
+	echo "Linking '${data}' to $base/data"
+	ln -s "${data}" data || exit 1
+else
+	echo >&2 "Directory $base/data already exists. Not touching it, however it should be a link '${data}'."
+fi
+
+echo "Finding proper parameters for dashboard..."
+
+# count all JSON files
+all=`ls "${data}" | grep .json$ | sed "s/\.json$//g"`
+count=0
+for x in $all
+do
+	y=`echo "$x" | tr "-" "_"`
+	eval "t=\${NETDATA_PRIORITY_${y}}"
+	if [ ! "$t" = "IGNORE" ]
+	then
+		count=$[count + 1]
+	fi
+done
+
+# find the optimal graphs per page
+w=1
+h=1
+a=1
+while [ $a -lt $count ]
+do
+	if [ $[h+1] -le $w ]
+	then
+		h=$[h+1]
+	else
+		w=$[w+1]
+		h=$[h-1]
+	fi
+	a=$[w*h]
+done
+
+# prefer to have wider graphs
+while [ $w -ge $h ]
+do
+	w=$[w-1]
+	h=$[h+1]
+done
+
+# make sure we don't display too small graphs
+if [ $w -gt 10 ]
+then
+	w=10
+fi
+if [ $h -gt 10 ]
+then
+	h=10
+fi
+
+cp "${base}/netdata.js" "${data}/"
+
+echo "Generating ${data}/index.html"
+host="`hostname`"
+cat >${data}/index.html <<EOF
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<style>
+        * {font-family:Arial}
+        div {float: left; margin: 0 0 0 0; }
+</style>
+<title>${host} netdata</title>
+<head>
+	<meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1" />
+
+	<!--Load the AJAX API-->
+	<script type="text/javascript" src="https://www.google.com/jsapi"></script>
+	<script src="//ajax.googleapis.com/ajax/libs/jquery/1.10.2/jquery.min.js"></script>
+	<script type="text/javascript" src="netdata.js"></script>
+	<script type="text/javascript">
+	
+	// Set a callback to run when the Google Visualization API is loaded.
+	google.setOnLoadCallback(drawCharts);
+	
+	function drawCharts() {
+		var width = $w; // if zero, auto-adjusts to 50% of screen, 1-10 goes 1/width of screen
+		var height = $h;
+		
+		// EDIT: add one line per interface you have
+		// EDIT: 
+		// EDIT:   name    div id                    json data           graph title
+		// EDIT: --------------------------------------------------------------------------------
+EOF
+
+for x in $all
+do
+	y=`echo "$x" | tr "-" "_"`
+	eval "NETDATA_TITLE_${y}=\${NETDATA_TITLE_${y}:-Live Network Usage for ${x}}"
+	eval "t=\${NETDATA_TITLE_${y}}"
+	
+	eval "p=\${NETDATA_PRIORITY_${y}}"
+	if [ ! "$p" = "IGNORE" ]
+	then
+		cat >>${data}/index.html <<EOF2
+		drawChart('${x}', '${x}_div', width, height, "data/${x}.json", "${t}");
+EOF2
+	fi
+done
+
+ref=$[4 * NETDATA_CONFIG_UPDATE_EVERY]
+tim=$[1000 * NETDATA_CONFIG_UPDATE_EVERY]
+if [ $count -gt 4 ]
+then
+	ref=1
+	tim=$[1000 * NETDATA_CONFIG_UPDATE_EVERY / count]
+	if [ $tim -lt $[100 * NETDATA_CONFIG_UPDATE_EVERY] ]
+	then
+		tim=$[100 * NETDATA_CONFIG_UPDATE_EVERY]
+	fi
+fi
+
+cat >>${data}/index.html <<EOF3
+	}
+	
+	var refreshCount = 0;
+        function myChartsRefresh() {
+		refreshCount++;
+		if(refreshCount > $NETDATA_CONFIG_RELOAD_EVERY) location.reload();
+		
+		// refresh up to $ref charts per second
+                refreshCharts($ref);
+        }
+	
+        // EDIT: how often the charts are updated, in milliseconds
+        setInterval(myChartsRefresh, $tim);
+	</script>
+</head>
+
+<body>
+ 	<!--
+		EDIT: add one div per interface you have
+		EDIT: use the same id above and bellow!
+	-->
+EOF3
+
+tmp="/tmp/$RANDOM.netdata.$$.$RANDOM"
+for x in $all
+do
+	y=`echo "$x" | tr "-" "_"`
+	eval "NETDATA_PRIORITY_${y}=\${NETDATA_PRIORITY_${y}:-${x}}"
+	eval "t=\${NETDATA_PRIORITY_${y}}"
+	if [ ! "$t" = "IGNORE" ]
+	then
+		echo "${t}.${x}"
+	fi
+done >"${tmp}"
+
+for x in `cat "${tmp}" | sort`
+do
+	n="`echo "$x" | cut -d '.' -f 2-`"
+	cat >>${data}/index.html <<EOF4
+	<div id="${n}_div"></div>
+EOF4
+done
+rm -f "${tmp}"
+
+cat >>${data}/index.html <<EOF5
+ </body>
+</html>
+EOF5
+
+set|grep ^NETDATA_ >netdata.conf
+
+if [ ! -h "${data}/data" ]
+then
+	cd "${data}"
+	ln -s . data
+fi
+
+echo "All Done."
+echo "Just hit netdata/ from your browser."
+
