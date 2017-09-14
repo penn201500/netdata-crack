@@ -24,10 +24,13 @@ if __name__ == '__main__':
     # for i in range(5):
     while 1:
         data = []
-        time.sleep(1)
         (rbytes, tbytes) = parse_proc_net_dev()
-        rbytes[:] = [float(x)/1024/8 for x in rbytes]
-        tbytes[:] = [float(x)/1024/8 for x in tbytes]
+        time.sleep(1)
+        (rbytes_new, tbytes_new) = parse_proc_net_dev()
+        # rbytes[:] = [float(x)/1024/8 for x in rbytes]
+        # tbytes[:] = [float(x)/1024/8 for x in tbytes]
+        in_flow = float(rbytes_new[0] - rbytes[0])/1024/8
+        out_flow = float(tbytes_new[0] - tbytes[0])/1024/8
         # print parse_proc_net_dev()
         # print rbytes
         # print tbytes
@@ -35,7 +38,7 @@ if __name__ == '__main__':
         timestamp = strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
         # if os.path.isfile('flow_stat.json'):
         #     shutil.copy('flow_stat.json', 'flow_stat-'+timestamp+'.json')
-        data.append({time_now:{"in_flow":rbytes, "out_flow":tbytes}})
+        data.append({time_now:{"in_flow":in_flow, "out_flow":out_flow}})
         with open("./flow_stat.json", "w") as f:
             f.truncate()
             json.dump(data, f)
