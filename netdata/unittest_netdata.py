@@ -3,10 +3,11 @@
 
 import unittest
 import sys
+from netdata import __version__
 
 # Unittest class
 # =============
-#print('Unit tests for NetData %s' % __version__)
+print('Unit tests for NetData %s' % __version__)
 
 class TestNetData(unittest.TestCase):
     """Test NetData class"""
