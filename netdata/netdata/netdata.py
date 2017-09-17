@@ -27,13 +27,8 @@ if __name__ == '__main__':
         (rbytes, tbytes) = parse_proc_net_dev()
         time.sleep(1)
         (rbytes_new, tbytes_new) = parse_proc_net_dev()
-        # rbytes[:] = [float(x)/1024/8 for x in rbytes]
-        # tbytes[:] = [float(x)/1024/8 for x in tbytes]
         in_flow = float(rbytes_new[0] - rbytes[0])/1024/8
         out_flow = float(tbytes_new[0] - tbytes[0])/1024/8
-        # print parse_proc_net_dev()
-        # print rbytes
-        # print tbytes
         time_now = strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         timestamp = strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
         # if os.path.isfile('flow_stat.json'):
